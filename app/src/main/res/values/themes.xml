@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.PickupWatch" parent="Theme.MaterialComponents.Light.NoActionBar">
+        <item name="colorPrimary">#FF9800</item>
+        <item name="colorPrimaryVariant">#F57C00</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#4CAF50</item>
+        <item name="android:statusBarColor">#FFFFFF</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

@@ -1,0 +1,10 @@
+<script>
+export default {
+  onCreate() {
+    console.log('[PickupWatch] Vela app created')
+  },
+  onDestroy() {
+    console.log('[PickupWatch] Vela app destroyed')
+  }
+}
+</script>

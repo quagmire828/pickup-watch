@@ -1,0 +1,12 @@
+{
+  "name": "pickup-watch-rpk",
+  "version": "2.0.0",
+  "description": "取件码助手 — 红米 Watch 6 (Xiaomi Vela) 手表端",
+  "scripts": {
+    "build": "aiot build",
+    "release": "aiot release"
+  },
+  "devDependencies": {
+    "aiot-toolkit": "2.0.5"
+  }
+}

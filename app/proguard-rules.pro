@@ -1,0 +1,3 @@
+-keep class com.xiaomi.xms.wearable.** { *; }
+-dontwarn com.xiaomi.xms.wearable.**
+-keep class * implements android.os.IInterface { *; }

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="4dp"
+    app:cardElevation="1dp"
+    app:cardCornerRadius="8dp"
+    app:cardBackgroundColor="#FFFFFF"
+    android:foreground="?android:attr/selectableItemBackground">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="16dp"
+        android:gravity="center_vertical">
+
+        <!-- 左侧信息 -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvStation"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="菜鸟驿站"
+                android:textSize="14sp"
+                android:textColor="#424242" />
+
+            <TextView
+                android:id="@+id/tvCode"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="8-3-5678"
+                android:textSize="24sp"
+                android:textColor="#212121"
+                android:textStyle="bold"
+                android:fontFamily="monospace"
+                android:layout_marginTop="4dp" />
+
+            <TextView
+                android:id="@+id/tvTime"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="11-17 10:30"
+                android:textSize="12sp"
+                android:textColor="#9E9E9E"
+                android:layout_marginTop="4dp" />
+        </LinearLayout>
+
+        <!-- 右侧按钮 -->
+        <Button
+            android:id="@+id/btnPicked"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:text="已取"
+            android:textSize="13sp"
+            android:paddingHorizontal="16dp"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:textColor="#4CAF50" />
+    </LinearLayout>
+
+</com.google.android.material.card.MaterialCardView>

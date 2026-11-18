@@ -1,0 +1,673 @@
+<template>
+  <div class="page">
+    <list class="list">
+      <list-item type="header" class="header-item">
+        <div class="header-box">
+          <div class="header-top">
+            <text class="title">取件码</text>
+            <text class="badge" if="{{hasCodes}}">待取 {{codes.length}} 件</text>
+          </div>
+          <text class="status">{{statusText}}</text>
+        </div>
+      </list-item>
+
+      <list-item type="empty" class="empty-item" if="{{!hasCodes}}">
+        <div class="empty-card">
+          <text class="empty-title">暂无待取快递</text>
+          <text class="empty-sub">{{emptyHint}}</text>
+        </div>
+      </list-item>
+
+      <list-item type="card" class="card-item" for="{{codes}}" tid="id">
+        <div class="card">
+          <text class="station">{{$item.label}}</text>
+          <text class="code">{{$item.code}}</text>
+          <div class="card-bottom">
+            <text class="time">{{$item.timeText}}</text>
+            <div class="pick-btn" if="{{!$item.confirming}}" @click="onTapPick($idx)">
+              <text class="pick-btn-text">已取</text>
+            </div>
+            <div class="confirm-btn" if="{{$item.confirming}}" @click="onTapPick($idx)">
+              <text class="confirm-btn-text">点此确认</text>
+            </div>
+          </div>
+        </div>
+      </list-item>
+
+      <list-item type="footer" class="footer-item">
+        <div class="refresh-btn" @click="onTapRefresh">
+          <text class="refresh-text">{{refreshBtnText}}</text>
+        </div>
+      </list-item>
+    </list>
+  </div>
+</template>
+
+<script>
+import interconnect from '@system.interconnect'
+import storage from '@system.storage'
+import vibrator from '@system.vibrator'
+
+const CACHE_KEY = 'pickup_cache_v2'
+const PENDING_KEY = 'pickup_pending_picks_v2'
+
+export default {
+  private: {
+    codes: [],
+    hasCodes: false,
+    syncing: false,
+    statusText: '正在连接手机...',
+    emptyHint: '可点击下方按钮扫描手机短信',
+    refreshBtnText: '扫描刷新',
+    conn: null,
+    pendingPicks: [],
+    syncTimer: null,
+    confirmTimer: null,
+    ready: false
+  },
+
+  onInit() {
+    this.loadLocalState()
+    this.initInterconnect()
+  },
+
+  onShow() {
+    if (this.ready && !this.syncing) {
+      this.requestSync(false)
+    }
+  },
+
+  onDestroy() {
+    if (this.syncTimer) {
+      clearTimeout(this.syncTimer)
+      this.syncTimer = null
+    }
+    if (this.confirmTimer) {
+      clearTimeout(this.confirmTimer)
+      this.confirmTimer = null
+    }
+  },
+
+  loadLocalState() {
+    const self = this
+    storage.get({
+      key: PENDING_KEY,
+      default: '[]',
+      success: function(pData) {
+        try {
+          const parsed = JSON.parse(pData || '[]')
+          self.pendingPicks = Array.isArray(parsed) ? parsed : []
+        } catch (e) {
+          self.pendingPicks = []
+        }
+        self.loadCachedCodes()
+      },
+      fail: function() {
+        self.pendingPicks = []
+        self.loadCachedCodes()
+      }
+    })
+  },
+
+  loadCachedCodes() {
+    const self = this
+    storage.get({
+      key: CACHE_KEY,
+      default: '[]',
+      success: function(cData) {
+        try {
+          const rawList = JSON.parse(cData || '[]')
+          if (Array.isArray(rawList) && rawList.length > 0) {
+            self.applyCodesList(rawList, false)
+            self.statusText = '已加载本地缓存 · 正在同步...'
+          }
+        } catch (e) {
+        }
+        self.ready = true
+        self.requestSync(false)
+      },
+      fail: function() {
+        self.ready = true
+        self.requestSync(false)
+      }
+    })
+  },
+
+  initInterconnect() {
+    const self = this
+    try {
+      this.conn = interconnect.instance()
+    } catch (e) {
+      this.statusText = '当前固件不支持蓝牙互联'
+      return
+    }
+
+    this.conn.onopen = function() {
+      console.log('[PickupWatch] interconnect opened')
+      self.requestSync(false)
+    }
+
+    this.conn.onmessage = function(res) {
+      if (!res || res.data === undefined || res.data === null) return
+      let msg = res.data
+      if (typeof msg === 'string') {
+        try {
+          msg = JSON.parse(msg)
+        } catch (e) {
+          return
+        }
+      }
+      if (msg && (msg.type === 'codes' || Array.isArray(msg.list))) {
+        self.clearSyncTimeout()
+        const list = Array.isArray(msg.list) ? msg.list : []
+        self.applyCodesList(list, true)
+        if (typeof msg.added === 'number' && msg.added > 0) {
+          self.statusText = '扫描新增 ' + msg.added + ' 件 · 已同步'
+          self.shortVibrate()
+        } else {
+          self.statusText = '蓝牙已同步 ' + self.nowTimeStr()
+        }
+      }
+    }
+
+    this.conn.onclose = function() {
+      console.log('[PickupWatch] interconnect closed')
+      if (self.syncing) {
+        self.finishOfflineStatus('连接已关闭')
+      }
+    }
+
+    this.conn.onerror = function(err) {
+      const code = err ? err.code : -1
+      console.log('[PickupWatch] interconnect error code=' + code)
+      if (code === 1001) {
+        self.clearSyncTimeout()
+        self.statusText = '手机未安装同签名版取件码助手'
+        self.emptyHint = '请先在手机安装配套 APK 并打开一次'
+      } else if (self.syncing) {
+        self.finishOfflineStatus('')
+      }
+    }
+  },
+
+  requestSync(forceScan) {
+    if (!this.conn) return
+    const self = this
+    this.syncing = true
+    this.refreshBtnText = forceScan ? '扫描短信中...' : '同步中...'
+    if (!this.hasCodes) {
+      this.statusText = forceScan ? '正在让手机扫描短信...' : '正在同步手机取件码...'
+    }
+
+    if (this.syncTimer) {
+      clearTimeout(this.syncTimer)
+    }
+    this.syncTimer = setTimeout(function() {
+      if (self.syncing) {
+        self.finishOfflineStatus('')
+      }
+    }, 5000)
+
+    // 若离线期间有待同步的已取记录，优先批量提交给手机
+    if (this.pendingPicks.length > 0) {
+      const idsToFlush = this.pendingPicks.slice()
+      this.conn.send({
+        data: {
+          type: 'pick',
+          ids: idsToFlush
+        },
+        success: function() {
+          self.pendingPicks = []
+          self.savePendingPicks()
+          if (forceScan) {
+            self.sendAction('scan')
+          }
+        },
+        fail: function(err) {
+          self.handleSendFail(err)
+        }
+      })
+      return
+    }
+
+    this.sendAction(forceScan ? 'scan' : 'sync')
+  },
+
+  sendAction(actionType) {
+    const self = this
+    this.conn.send({
+      data: {
+        type: actionType
+      },
+      success: function() {
+        console.log('[PickupWatch] send success: ' + actionType)
+      },
+      fail: function(err) {
+        self.handleSendFail(err)
+      }
+    })
+  },
+
+  handleSendFail(err) {
+    const code = err ? err.code : -1
+    if (code === 1001) {
+      this.clearSyncTimeout()
+      this.statusText = '手机未安装配套取件码助手'
+      this.emptyHint = '请确认手机已安装同签名 APK'
+    } else {
+      this.finishOfflineStatus('')
+    }
+  },
+
+  finishOfflineStatus(reason) {
+    this.clearSyncTimeout()
+    if (this.hasCodes) {
+      this.statusText = '离线缓存模式（未连手机后台）'
+    } else {
+      this.statusText = reason || '未连接手机端服务'
+      this.emptyHint = '请打开手机端「取件码助手」保持后台就绪'
+    }
+  },
+
+  clearSyncTimeout() {
+    if (this.syncTimer) {
+      clearTimeout(this.syncTimer)
+      this.syncTimer = null
+    }
+    this.syncing = false
+    this.refreshBtnText = '扫描刷新'
+  },
+
+  applyCodesList(rawList, persistCache) {
+    const pendingSet = {}
+    for (let i = 0; i < this.pendingPicks.length; i++) {
+      pendingSet[String(this.pendingPicks[i])] = true
+    }
+
+    const formatted = []
+    for (let i = 0; i < rawList.length; i++) {
+      const item = rawList[i]
+      if (!item || !item.code) continue
+      if (pendingSet[String(item.id)]) continue
+
+      const courier = item.courier || ''
+      const station = item.station || ''
+      let label = ''
+      if (courier && station) {
+        label = courier + ' · ' + station
+      } else if (station) {
+        label = station
+      } else if (courier) {
+        label = courier
+      } else {
+        label = '快递包裹'
+      }
+
+      formatted.push({
+        id: item.id || (i + 1),
+        code: String(item.code),
+        courier: courier,
+        station: station,
+        label: label,
+        time: item.time || '',
+        timeText: item.time || '待取件',
+        confirming: false
+      })
+    }
+
+    this.codes = formatted
+    this.hasCodes = formatted.length > 0
+
+    if (persistCache) {
+      this.saveCachedCodes(formatted)
+    }
+  },
+
+  onTapRefresh() {
+    if (this.syncing) return
+    this.shortVibrate()
+    this.requestSync(true)
+  },
+
+  onTapPick(idx) {
+    if (idx < 0 || idx >= this.codes.length) return
+    const target = this.codes[idx]
+    if (!target) return
+
+    // 第一次点击进入二次确认态，防止抬腕误触
+    if (!target.confirming) {
+      const updated = []
+      for (let i = 0; i < this.codes.length; i++) {
+        const c = this.codes[i]
+        updated.push({
+          id: c.id,
+          code: c.code,
+          courier: c.courier,
+          station: c.station,
+          label: c.label,
+          time: c.time,
+          timeText: c.timeText,
+          confirming: i === idx
+        })
+      }
+      this.codes = updated
+
+      const self = this
+      if (this.confirmTimer) clearTimeout(this.confirmTimer)
+      this.confirmTimer = setTimeout(function() {
+        self.resetConfirmState()
+      }, 3000)
+      return
+    }
+
+    // 第二次点击确认已取
+    if (this.confirmTimer) {
+      clearTimeout(this.confirmTimer)
+      this.confirmTimer = null
+    }
+    this.shortVibrate()
+
+    const pickedId = target.id
+    const remaining = []
+    for (let i = 0; i < this.codes.length; i++) {
+      if (i !== idx) {
+        const c = this.codes[i]
+        c.confirming = false
+        remaining.push(c)
+      }
+    }
+    this.codes = remaining
+    this.hasCodes = remaining.length > 0
+    this.saveCachedCodes(remaining)
+
+    // 同步到手机，若蓝牙未通则记入离线队列下次自动补发
+    const self = this
+    if (this.conn) {
+      this.conn.send({
+        data: {
+          type: 'pick',
+          id: pickedId
+        },
+        success: function() {
+          self.statusText = '已同步标记已取'
+        },
+        fail: function() {
+          self.enqueuePendingPick(pickedId)
+          self.statusText = '已取（连手机后自动同步）'
+        }
+      })
+    } else {
+      this.enqueuePendingPick(pickedId)
+      this.statusText = '已取（连手机后自动同步）'
+    }
+  },
+
+  resetConfirmState() {
+    let changed = false
+    const updated = []
+    for (let i = 0; i < this.codes.length; i++) {
+      const c = this.codes[i]
+      if (c.confirming) changed = true
+      updated.push({
+        id: c.id,
+        code: c.code,
+        courier: c.courier,
+        station: c.station,
+        label: c.label,
+        time: c.time,
+        timeText: c.timeText,
+        confirming: false
+      })
+    }
+    if (changed) {
+      this.codes = updated
+    }
+  },
+
+  enqueuePendingPick(id) {
+    if (!id) return
+    for (let i = 0; i < this.pendingPicks.length; i++) {
+      if (this.pendingPicks[i] === id) return
+    }
+    this.pendingPicks.push(id)
+    this.savePendingPicks()
+  },
+
+  saveCachedCodes(list) {
+    const slim = []
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i]
+      slim.push({
+        id: c.id,
+        code: c.code,
+        courier: c.courier,
+        station: c.station,
+        time: c.time
+      })
+    }
+    storage.set({
+      key: CACHE_KEY,
+      value: JSON.stringify(slim)
+    })
+  },
+
+  savePendingPicks() {
+    storage.set({
+      key: PENDING_KEY,
+      value: JSON.stringify(this.pendingPicks)
+    })
+  },
+
+  shortVibrate() {
+    try {
+      vibrator.vibrate({ mode: 'short' })
+    } catch (e) {
+    }
+  },
+
+  nowTimeStr() {
+    const d = new Date()
+    const hh = d.getHours() < 10 ? '0' + d.getHours() : '' + d.getHours()
+    const mm = d.getMinutes() < 10 ? '0' + d.getMinutes() : '' + d.getMinutes()
+    return hh + ':' + mm
+  }
+}
+</script>
+
+<style>
+.page {
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  background-color: #000000;
+}
+
+.list {
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+}
+
+.header-item {
+  width: 100%;
+  flex-direction: column;
+}
+
+.header-box {
+  width: 100%;
+  padding-top: 28px;
+  padding-left: 24px;
+  padding-right: 24px;
+  padding-bottom: 10px;
+  flex-direction: column;
+}
+
+.header-top {
+  width: 100%;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.title {
+  font-size: 32px;
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.badge {
+  font-size: 24px;
+  font-weight: bold;
+  color: #ff9f0a;
+}
+
+.status {
+  margin-top: 6px;
+  font-size: 20px;
+  color: #8e8e93;
+  lines: 1;
+  text-overflow: ellipsis;
+}
+
+.empty-item {
+  width: 100%;
+  flex-direction: column;
+}
+
+.empty-card {
+  width: 392px;
+  margin-top: 16px;
+  margin-left: 20px;
+  margin-right: 20px;
+  margin-bottom: 12px;
+  padding-top: 44px;
+  padding-bottom: 44px;
+  padding-left: 24px;
+  padding-right: 24px;
+  background-color: #1c1c1e;
+  border-radius: 28px;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.empty-title {
+  font-size: 28px;
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.empty-sub {
+  margin-top: 12px;
+  font-size: 22px;
+  color: #8e8e93;
+  text-align: center;
+}
+
+.card-item {
+  width: 100%;
+  flex-direction: column;
+}
+
+.card {
+  width: 400px;
+  margin-top: 8px;
+  margin-bottom: 8px;
+  margin-left: 16px;
+  margin-right: 16px;
+  padding-top: 18px;
+  padding-bottom: 18px;
+  padding-left: 22px;
+  padding-right: 22px;
+  background-color: #1c1c1e;
+  border-radius: 26px;
+  flex-direction: column;
+}
+
+.station {
+  font-size: 22px;
+  color: #aeaeb2;
+  lines: 1;
+  text-overflow: ellipsis;
+}
+
+.code {
+  margin-top: 8px;
+  font-size: 42px;
+  font-weight: bold;
+  color: #ffffff;
+  lines: 2;
+  text-overflow: ellipsis;
+}
+
+.card-bottom {
+  width: 100%;
+  margin-top: 12px;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.time {
+  font-size: 20px;
+  color: #636366;
+}
+
+.pick-btn {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 22px;
+  padding-right: 22px;
+  background-color: #1b3b22;
+  border-radius: 22px;
+  justify-content: center;
+  align-items: center;
+}
+
+.pick-btn-text {
+  font-size: 22px;
+  font-weight: bold;
+  color: #4cd964;
+}
+
+.confirm-btn {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 18px;
+  padding-right: 18px;
+  background-color: #ff9f0a;
+  border-radius: 22px;
+  justify-content: center;
+  align-items: center;
+}
+
+.confirm-btn-text {
+  font-size: 22px;
+  font-weight: bold;
+  color: #000000;
+}
+
+.footer-item {
+  width: 100%;
+  flex-direction: column;
+}
+
+.refresh-btn {
+  width: 392px;
+  height: 76px;
+  margin-top: 16px;
+  margin-left: 20px;
+  margin-right: 20px;
+  margin-bottom: 44px;
+  background-color: #ff9f0a;
+  border-radius: 38px;
+  justify-content: center;
+  align-items: center;
+}
+
+.refresh-text {
+  font-size: 26px;
+  font-weight: bold;
+  color: #000000;
+}
+</style>

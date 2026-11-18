@@ -1,0 +1,33 @@
+# Gradle & Android Studio
+.gradle/
+build/
+app/build/
+local.properties
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Signing keys & certificates (never commit to public repo)
+keystore/
+watch/pickup-codes/sign/
+*.jks
+*.keystore
+*.p12
+*.pem
+
+# Compiled packages (kept locally, excluded from source repo)
+*.apk
+*.rpk
+*.idsig
+
+# Xiaomi Vela Watch build & dependencies
+watch/pickup-codes/node_modules/
+watch/pickup-codes/build/
+watch/pickup-codes/dist/
+watch/.temp_*/
+
+# OS temp files
+.DS_Store
+Thumbs.db
